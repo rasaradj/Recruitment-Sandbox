@@ -4,7 +4,9 @@ let aiInstance: GoogleGenAI | null = null;
 
 function getAI() {
   if (!aiInstance) {
-    const apiKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '';
+    // Vite will statically replace process.env.GEMINI_API_KEY with the value from the environment
+    const apiKey = process.env.GEMINI_API_KEY;
+    
     if (!apiKey || apiKey === "undefined") {
       console.warn("GEMINI_API_KEY is missing. AI features will not work.");
     }
