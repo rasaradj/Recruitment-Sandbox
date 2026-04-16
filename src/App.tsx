@@ -601,6 +601,12 @@ export default function App() {
                 setError(null);
                 setIsLoggingIn(true);
                 try {
+                  // Check if critical secrets are missing before trying to sign in
+                  const isConfigMissing = !import.meta.env.VITE_FIREBASE_API_KEY || !import.meta.env.VITE_FIREBASE_PROJECT_ID;
+                  if (isConfigMissing) {
+                    throw new Error("Missing Secrets: VITE_FIREBASE_API_KEY or VITE_FIREBASE_PROJECT_ID is not set in the Secrets panel.");
+                  }
+                  
                   await signInWithGoogle();
                 } catch (err: any) {
                   console.error("Login error:", err);

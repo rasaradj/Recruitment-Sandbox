@@ -14,8 +14,23 @@ const firebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || '(default)'
 };
 
+// Simple validation to check if configuration is missing
+const missingKeys = Object.entries(firebaseConfig)
+  .filter(([key, value]) => !value && key !== 'firestoreDatabaseId')
+  .map(([key]) => key);
+
+if (missingKeys.length > 0) {
+  const errorMsg = `Firebase configuration is missing: ${missingKeys.join(', ')}. Set them in the AI Studio Secrets panel.`;
+  console.error(errorMsg);
+  // We throw a delayed error or just let initializeApp fail, 
+  // but better to have a check in the auth helpers.
+}
+
 // Initialize Firebase SDK with safety check
 const app = initializeApp(firebaseConfig);
+if (!firebaseConfig.apiKey) {
+  console.warn("Firebase initialized with missing API Key. Login will fail.");
+}
 
 // Use the database ID from config if provided, specifically handling "(default)"
 export const db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
