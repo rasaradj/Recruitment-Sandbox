@@ -1,13 +1,24 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, deleteDoc, doc, getDoc, setDoc, getDocFromServer, updateDoc } from 'firebase/firestore';
-import firebaseConfig from '@/firebase-applet-config.json';
+
+// Firebase configuration from environment variables
+// This prevents secrets from being committed to source control.
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || '(default)'
+};
 
 // Initialize Firebase SDK with safety check
 const app = initializeApp(firebaseConfig);
 
 // Use the database ID from config if provided, specifically handling "(default)"
-export const db = firebaseConfig?.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+export const db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
   ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
   : getFirestore(app);
 export const auth = getAuth(app);
