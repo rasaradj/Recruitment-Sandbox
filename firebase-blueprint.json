@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "SavedOutput": {
+      "title": "Saved Output",
+      "description": "A saved recruitment output (JD and Interview Guide)",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "rawNotes": { "type": "string" },
+        "selectedLanguages": { "type": "array", "items": { "type": "string" } },
+        "results": { 
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "jobDescription": { "type": "string" },
+              "interviewGuide": { "type": "string" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "results", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/saved_outputs/{outputId}": {
+      "schema": "SavedOutput",
+      "description": "Saved recruitment outputs"
+    }
+  }
+}
