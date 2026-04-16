@@ -101,3 +101,28 @@ export async function chatWithGemini(messages: ChatMessage[]) {
 
   return response.text || "I'm sorry, I couldn't process that.";
 }
+
+export async function getRoleBenchmarks(jobTitle: string, language: string): Promise<string> {
+  const response = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `Provide industry benchmarks for the role: "${jobTitle}" in ${language}.
+Include:
+1. Typical Salary Ranges (Global/Regional)
+2. Core Competencies (Top 5)
+3. Market Demand Level
+4. Common Benefits/Perks for this role
+5. Key Performance Indicators (KPIs)
+
+Format as a clean, professional Markdown report.` }]
+      }
+    ],
+    config: {
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+    }
+  });
+
+  return response.text || "No benchmarks available for this role.";
+}

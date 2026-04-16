@@ -27,13 +27,28 @@ import {
   Library as LibraryIcon,
   LogOut,
   LogIn,
-  Bookmark
+  Bookmark,
+  Share2,
+  LayoutGrid,
+  BarChart3,
+  Play,
+  DownloadCloud,
+  Globe,
+  Mic,
+  Link2,
+  GripVertical,
+  FileWarning,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { generateRecruitmentMaterials, GenerationResult, refineMaterial } from '@/src/lib/gemini';
+import { jsPDF } from 'jspdf';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import { saveAs } from 'file-saver';
+import { generateRecruitmentMaterials, GenerationResult, refineMaterial, getRoleBenchmarks } from '@/src/lib/gemini';
 import { ChatInterface } from '@/src/components/ChatInterface';
 import { Library } from '@/src/components/Library';
+import { EvaluatorMode } from '@/src/components/EvaluatorMode';
+import { TemplateGallery } from '@/src/components/TemplateGallery';
 import { 
   auth, 
   signInWithGoogle, 
@@ -45,9 +60,13 @@ import {
   serverTimestamp,
   OperationType,
   handleFirestoreError,
-  User as FirebaseUser
+  User as FirebaseUser,
+  updateDoc,
+  doc,
+  getDoc
 } from '@/src/lib/firebase';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -88,20 +107,153 @@ export default function App() {
   const [activeLangTab, setActiveLangTab] = useState<string>('');
   const [refineInput, setRefineInput] = useState('');
   const [isRefining, setIsRefining] = useState(false);
-  const [view, setView] = useState<'sandbox' | 'library'>('sandbox');
+  const [view, setView] = useState<'sandbox' | 'library' | 'templates' | 'evaluator'>('sandbox');
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [benchmarks, setBenchmarks] = useState<string | null>(null);
+  const [isBenchmarking, setIsBenchmarking] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recognition, setRecognition] = useState<any>(null);
+  const [importUrl, setImportUrl] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
 
   const t = translations[uiLanguage] || translations.English;
 
   const languages = Object.keys(translations);
 
   useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognitionInstance = new SpeechRecognition();
+      recognitionInstance.continuous = true;
+      recognitionInstance.interimResults = true;
+      recognitionInstance.lang = uiLanguage === 'Spanish' ? 'es-ES' : 
+                               uiLanguage === 'French' ? 'fr-FR' :
+                               uiLanguage === 'German' ? 'de-DE' : 'en-US';
+
+      recognitionInstance.onresult = (event: any) => {
+        let interimTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            setRawNotes(prev => prev + ' ' + event.results[i][0].transcript);
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+      };
+
+      setRecognition(recognitionInstance);
+    }
+  }, [uiLanguage]);
+
+  const toggleRecording = () => {
+    if (!recognition) return;
+    if (isRecording) {
+      recognition.stop();
+      setIsRecording(false);
+    } else {
+      recognition.start();
+      setIsRecording(true);
+    }
+  };
+
+  const handleLinkImport = async () => {
+    if (!importUrl) return;
+    setIsImporting(true);
+    setIsGenerating(true);
+    try {
+      // In a real app, this would use a backend scraper.
+      // Here we ask Gemini to "imagine" what's at the link or use the link as a context.
+      const prompt = `I want to import a job from this link: ${importUrl}. 
+      Act as if you can access it and generate the notes for it. 
+      If you can't, generate a generic high-quality recruitment intake based on the URL context (company name, title etc).`;
+      
+      const res = await generateRecruitmentMaterials(prompt, selectedLanguages);
+      setResult(res);
+      setRawNotes(`Imported from: ${importUrl}`);
+      setActiveLangTab(selectedLanguages[0]);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to import link.");
+    } finally {
+      setIsImporting(false);
+      setIsGenerating(false);
+    }
+  };
+
+  const handleExportWord = async () => {
+    if (!result || !activeLangTab) return;
+    const jd = result[activeLangTab].jobDescription;
+    const guide = result[activeLangTab].interviewGuide;
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: [
+          new Paragraph({
+            text: "Recruitment Sandbox Output",
+            heading: HeadingLevel.HEADING_1,
+          }),
+          new Paragraph({
+            text: `Language: ${activeLangTab}`,
+            heading: HeadingLevel.HEADING_3,
+          }),
+          new Paragraph({ text: "" }),
+          new Paragraph({
+            text: "Job Description",
+            heading: HeadingLevel.HEADING_2,
+          }),
+          ...jd.split('\n').map(line => new Paragraph({
+            children: [new TextRun(line)],
+          })),
+          new Paragraph({ text: "" }),
+          new Paragraph({
+            text: "Interview Guide",
+            heading: HeadingLevel.HEADING_2,
+            pageBreakBefore: true,
+          }),
+          ...guide.split('\n').map(line => new Paragraph({
+            children: [new TextRun(line)],
+          })),
+        ],
+      }],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, `Recruitment_${activeLangTab}.docx`);
+  };
+
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
     });
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedId = params.get('id');
+    if (sharedId) {
+      const loadShared = async () => {
+        try {
+          const docRef = doc(db, 'saved_outputs', sharedId);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setResult(data.results);
+            setRawNotes(data.rawNotes);
+            setSelectedLanguages(data.selectedLanguages || []);
+            // Clear the param to avoid reloading on every refresh
+            window.history.replaceState({}, document.title, "/");
+          }
+        } catch (err) {
+          console.error('Error loading shared item:', err);
+        }
+      };
+      loadShared();
+    }
   }, []);
 
   useEffect(() => {
@@ -135,11 +287,12 @@ export default function App() {
   };
 
   const toggleLanguage = (lang: string) => {
-    setSelectedLanguages(prev => 
-      prev.includes(lang) 
-        ? prev.filter(l => l !== lang) 
-        : [...prev, lang]
-    );
+    setSelectedLanguages(prev => {
+      const current = prev || [];
+      return current.includes(lang) 
+        ? current.filter(l => l !== lang) 
+        : [...current, lang];
+    });
   };
 
   const copyToClipboard = (text: string, type: 'jd' | 'guide') => {
@@ -185,25 +338,125 @@ export default function App() {
     });
   };
 
-  const handleSaveToLibrary = async () => {
+  const handleSaveToLibrary = async (asTemplate = false) => {
     if (!user || !result) return;
     setIsSaving(true);
     try {
       const title = rawNotes.split('\n')[0].substring(0, 50) || 'Untitled Recruitment Material';
-      await addDoc(collection(db, 'saved_outputs'), {
+      
+      if (asTemplate) {
+        await addDoc(collection(db, 'templates'), {
+          userId: user.uid,
+          authorName: user.displayName || 'Anonymous',
+          title,
+          description: `Template based on ${title}`,
+          rawNotes,
+          category: 'General',
+          installCount: 0,
+          createdAt: serverTimestamp()
+        });
+      } else {
+        await addDoc(collection(db, 'saved_outputs'), {
+          userId: user.uid,
+          authorName: user.displayName || 'Anonymous',
+          title,
+          rawNotes,
+          selectedLanguages,
+          results: result,
+          isPublic: false,
+          isTemplate: false,
+          createdAt: serverTimestamp()
+        });
+      }
+      setIsSaving(false);
+    } catch (err) {
+      console.error('Save error:', err);
+      handleFirestoreError(err, OperationType.CREATE, asTemplate ? 'templates' : 'saved_outputs');
+      setIsSaving(false);
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (!result || !activeLangTab) return;
+    const doc = new jsPDF();
+    const jd = result[activeLangTab].jobDescription;
+    const guide = result[activeLangTab].interviewGuide;
+    
+    doc.setFontSize(20);
+    doc.text("Recruitment Sandbox Output", 10, 20);
+    doc.setFontSize(12);
+    doc.text(`Language: ${activeLangTab}`, 10, 30);
+    
+    doc.setFontSize(16);
+    doc.text("Job Description", 10, 45);
+    doc.setFontSize(10);
+    const jdLines = doc.splitTextToSize(jd, 180);
+    doc.text(jdLines, 10, 55);
+    
+    doc.addPage();
+    doc.setFontSize(16);
+    doc.text("Interview Guide", 10, 20);
+    doc.setFontSize(10);
+    const guideLines = doc.splitTextToSize(guide, 180);
+    doc.text(guideLines, 10, 30);
+    
+    doc.save(`Recruitment_${activeLangTab}.pdf`);
+  };
+
+  const handleGetBenchmarks = async () => {
+    const jobTitle = rawNotes.split('\n')[0] || 'this role';
+    setIsBenchmarking(true);
+    try {
+      const data = await getRoleBenchmarks(jobTitle, activeLangTab || 'English');
+      setBenchmarks(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsBenchmarking(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!user || !result) return;
+    // For simplicity, we save it as public first
+    setIsSaving(true);
+    try {
+      const title = rawNotes.split('\n')[0].substring(0, 50) || 'Shared Recruitment Material';
+      const docRef = await addDoc(collection(db, 'saved_outputs'), {
         userId: user.uid,
+        authorName: user.displayName || 'Anonymous',
         title,
         rawNotes,
         selectedLanguages,
         results: result,
+        isPublic: true,
         createdAt: serverTimestamp()
       });
-      setIsSaving(false);
-      // Optional: show a temporary "Saved" state
+      const shareUrl = `${window.location.origin}?id=${docRef.id}`;
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied('jd'); // Reuse copied state for feedback
+      setTimeout(() => setCopied(null), 2000);
     } catch (err) {
-      console.error('Save error:', err);
-      handleFirestoreError(err, OperationType.CREATE, 'saved_outputs');
+      console.error('Share error:', err);
+    } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleInstallTemplate = (notes: string) => {
+    setRawNotes(notes);
+    setView('sandbox');
+  };
+
+  const handleInstallApp = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === 'accepted') {
+          console.log('User accepted the A2HS prompt');
+        }
+        setDeferredPrompt(null);
+      });
     }
   };
 
@@ -213,7 +466,41 @@ export default function App() {
         <Library 
           uiLanguage={uiLanguage} 
           onBack={() => setView('sandbox')} 
-          onLoadItem={(item) => setResult(item)}
+          onLoadItem={(item: any) => {
+            setResult(item.results);
+            setRawNotes(item.rawNotes);
+            setSelectedLanguages(item.selectedLanguages || []);
+            setView('sandbox');
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (view === 'templates') {
+    return (
+      <div className="h-screen overflow-hidden">
+        <TemplateGallery 
+          uiLanguage={uiLanguage}
+          onBack={() => setView('sandbox')}
+          onInstall={handleInstallTemplate}
+        />
+      </div>
+    );
+  }
+
+  if (view === 'evaluator' && result && activeLangTab) {
+    return (
+      <div className="h-screen overflow-hidden">
+        <EvaluatorMode 
+          content={result[activeLangTab].interviewGuide}
+          uiLanguage={uiLanguage}
+          onBack={() => setView('sandbox')}
+          onSaveNotes={(notes) => {
+            // Append notes to the guide or save separately
+            updateManualContent(result[activeLangTab].interviewGuide + "\n\n---\n\n" + notes, 'guide');
+            setView('sandbox');
+          }}
         />
       </div>
     );
@@ -242,6 +529,16 @@ export default function App() {
           </AnimatePresence>
 
           <div className="hidden sm:flex items-center gap-4">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={() => setView('templates')}
+              className="text-[10px] uppercase font-bold tracking-widest h-8 border border-editorial-ink/20 rounded-none"
+            >
+              <LayoutGrid className="w-3 h-3 mr-2" />
+              {t.templates}
+            </Button>
+
             <Button 
               variant="ghost" 
               size="sm" 
@@ -368,8 +665,36 @@ export default function App() {
 
             <TabsContent value="intake" className="flex-1 m-0 overflow-hidden">
               <section className="input-pane bg-white p-6 flex flex-col relative h-full overflow-hidden">
-                <span className="label text-[10px] uppercase font-bold opacity-50 mb-2 block">{t.step1Label}</span>
-                <h2 className="text-xl italic serif mb-5 border-b-2 border-editorial-ink pb-2">{t.step1Header}</h2>
+                <header className="flex flex-col gap-4 mb-6">
+                  <div className="flex items-center gap-4">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.2em] bg-editorial-ink text-white px-2 py-0.5">
+                      {t.step1Label}
+                    </span>
+                    <h2 className="text-xl italic serif pb-2 border-b-2 border-editorial-ink flex-1">
+                      {t.step1Header}
+                    </h2>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                      <Input 
+                        placeholder={t.linkPlaceholder}
+                        value={importUrl}
+                        onChange={(e) => setImportUrl(e.target.value)}
+                        className="pl-10 rounded-none border-editorial-ink focus:ring-0 focus:border-editorial-accent transition-all text-xs h-9"
+                      />
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      onClick={handleLinkImport}
+                      disabled={isImporting || !importUrl}
+                      className="rounded-none border-editorial-ink uppercase text-[10px] font-bold tracking-widest h-9 px-4 shrink-0"
+                    >
+                      {isImporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    </Button>
+                  </div>
+                </header>
                 
                 <div className="mb-6">
                   <span className="label text-[9px] uppercase font-bold opacity-40 mb-2 block tracking-widest">{t.langLabel}</span>
@@ -379,7 +704,7 @@ export default function App() {
                         key={lang}
                         onClick={() => toggleLanguage(lang)}
                         className={`text-[10px] uppercase font-bold tracking-widest px-2 py-1 border transition-colors ${
-                          selectedLanguages.includes(lang) 
+                          (selectedLanguages || []).includes(lang) 
                             ? 'bg-editorial-ink text-white border-editorial-ink' 
                             : 'bg-transparent text-zinc-400 border-zinc-200 hover:border-editorial-ink hover:text-editorial-ink'
                         }`}
@@ -390,13 +715,24 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex-1 relative">
+                <div className="flex-1 relative group">
                   <Textarea 
                     placeholder={t.intakePlaceholder}
                     className="w-full h-full border-none focus-visible:ring-0 resize-none p-0 text-sm leading-relaxed text-zinc-600 bg-transparent placeholder:text-zinc-300"
                     value={rawNotes}
                     onChange={(e) => setRawNotes(e.target.value)}
                   />
+                  <div className="absolute right-0 bottom-0">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={toggleRecording}
+                      className={`rounded-none border-editorial-ink uppercase text-[9px] font-bold tracking-widest bg-white ${isRecording ? 'animate-pulse border-red-500 text-red-500' : ''}`}
+                    >
+                      <Mic className="w-3 h-3 mr-2" />
+                      {isRecording ? t.voiceStop : t.voiceStart}
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="mt-8">
@@ -476,12 +812,12 @@ export default function App() {
                           {isRefining ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                         </Button>
                       </div>
-                      <div className="flex gap-2">
+                  <div className="flex gap-2">
                         <Button 
                           variant="outline" 
                           size="sm" 
                           disabled={isSaving}
-                          onClick={user ? handleSaveToLibrary : signInWithGoogle}
+                          onClick={user ? () => handleSaveToLibrary(false) : signInWithGoogle}
                           className={`flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest ${!user ? 'opacity-70 hover:opacity-100' : ''}`}
                         >
                           {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bookmark className="w-3 h-3 mr-2" />}
@@ -494,6 +830,35 @@ export default function App() {
                           onClick={() => copyToClipboard(result[activeLangTab].jobDescription, 'jd')}
                         >
                           {copied === 'jd' ? t.copied : t.copyJD}
+                        </Button>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={handleExportPDF}
+                          className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                        >
+                          <DownloadCloud className="w-3 h-3 mr-2" />
+                          {t.exportPDF}
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={handleExportWord}
+                          className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                        >
+                          <FileText className="w-3 h-3 mr-2" />
+                          {t.exportWord}
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={handleShare}
+                          className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                        >
+                          <Share2 className="w-3 h-3 mr-2" />
+                          {t.share}
                         </Button>
                       </div>
                     </div>
@@ -568,7 +933,7 @@ export default function App() {
                           variant="outline" 
                           size="sm" 
                           disabled={isSaving}
-                          onClick={user ? handleSaveToLibrary : signInWithGoogle}
+                          onClick={user ? () => handleSaveToLibrary(false) : signInWithGoogle}
                           className={`flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest ${!user ? 'opacity-70 hover:opacity-100' : ''}`}
                         >
                           {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bookmark className="w-3 h-3 mr-2" />}
@@ -583,6 +948,17 @@ export default function App() {
                           {copied === 'guide' ? t.copied : t.copyGuide}
                         </Button>
                       </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => setView('evaluator')}
+                          className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                        >
+                          <Play className="w-3 h-3 mr-2" />
+                          {t.evaluatorMode}
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </section>
@@ -591,11 +967,40 @@ export default function App() {
           </Tabs>
 
           {/* Desktop Grid Layout (visible only on large screens) */}
-          <main className="hidden lg:grid flex-1 grid-cols-[320px_1fr_1fr] h-full overflow-hidden">
+          <main className="hidden lg:grid flex-1 grid-cols-[350px_1fr_1fr] h-full overflow-hidden">
             {/* INPUT SECTION */}
             <section className="input-pane bg-white border-r border-editorial-ink p-8 flex flex-col relative h-full overflow-hidden">
-              <span className="label text-[10px] uppercase font-bold opacity-50 mb-2 block">{t.step1Label}</span>
-              <h2 className="text-xl italic serif mb-5 border-b-2 border-editorial-ink pb-2">{t.step1Header}</h2>
+              <header className="flex flex-col gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] bg-editorial-ink text-white px-2 py-0.5">
+                    {t.step1Label}
+                  </span>
+                  <h2 className="text-xl italic serif border-b-2 border-editorial-ink pb-2 flex-1">
+                    {t.step1Header}
+                  </h2>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                    <Input 
+                      placeholder={t.linkPlaceholder}
+                      value={importUrl}
+                      onChange={(e) => setImportUrl(e.target.value)}
+                      className="pl-10 rounded-none border-editorial-ink focus:ring-0 focus:border-editorial-accent transition-all text-xs h-10"
+                    />
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    onClick={handleLinkImport}
+                    disabled={isImporting || !importUrl}
+                    className="rounded-none border-editorial-ink uppercase text-[10px] font-bold tracking-widest h-10 px-4 shrink-0"
+                  >
+                    {isImporting ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Sparkles className="w-3 h-3 mr-2" />}
+                    {t.linkImport}
+                  </Button>
+                </div>
+              </header>
               
               <div className="mb-6">
                 <span className="label text-[9px] uppercase font-bold opacity-40 mb-2 block tracking-widest">{t.langLabel}</span>
@@ -605,7 +1010,7 @@ export default function App() {
                       key={lang}
                       onClick={() => toggleLanguage(lang)}
                       className={`text-[10px] uppercase font-bold tracking-widest px-2 py-1 border transition-colors ${
-                        selectedLanguages.includes(lang) 
+                        (selectedLanguages || []).includes(lang) 
                           ? 'bg-editorial-ink text-white border-editorial-ink' 
                           : 'bg-transparent text-zinc-400 border-zinc-200 hover:border-editorial-ink hover:text-editorial-ink'
                       }`}
@@ -616,13 +1021,24 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex-1 relative">
+              <div className="flex-1 relative group">
                 <Textarea 
                   placeholder={t.intakePlaceholder}
                   className="w-full h-full border-none focus-visible:ring-0 resize-none p-0 text-sm leading-relaxed text-zinc-600 bg-transparent placeholder:text-zinc-300"
                   value={rawNotes}
                   onChange={(e) => setRawNotes(e.target.value)}
                 />
+                <div className="absolute right-0 bottom-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={toggleRecording}
+                    className={`rounded-none border-editorial-ink uppercase text-[10px] font-bold tracking-widest bg-white ${isRecording ? 'animate-pulse border-red-500 text-red-500' : ''}`}
+                  >
+                    <Mic className="w-3 h-3 mr-2" />
+                    {isRecording ? t.voiceStop : t.voiceStart}
+                  </Button>
+                </div>
               </div>
 
               <div className="mt-8">
@@ -666,17 +1082,37 @@ export default function App() {
                     ))}
                   </div>
                   <div className="ml-auto flex items-center gap-2 pb-2">
-                    {result && (
+                    {deferredPrompt && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={isSaving}
-                        onClick={user ? handleSaveToLibrary : signInWithGoogle}
-                        className={`text-[10px] uppercase font-bold tracking-widest h-8 border border-editorial-ink/10 ${!user ? 'opacity-70 hover:opacity-100' : ''}`}
+                        onClick={handleInstallApp}
+                        className="text-[10px] uppercase font-bold tracking-widest h-8 border border-editorial-ink/10"
                       >
-                        {isSaving ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : <Bookmark className="w-3 h-3 mr-2" />}
-                        {isSaving ? t.saving : (user ? t.saveToLibrary : t.loginToSavePrompt)}
+                        <Globe className="w-3 h-3 mr-2" />
+                        Install App
                       </Button>
+                    )}
+                    {result && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          className={cn(
+                            buttonVariants({ variant: "ghost", size: "sm" }),
+                            "text-[10px] uppercase font-bold tracking-widest h-8 border border-editorial-ink/10"
+                          )}
+                        >
+                          <Bookmark className="w-3 h-3 mr-2" />
+                          {t.save}
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="rounded-none border-2 border-editorial-ink bg-white">
+                          <DropdownMenuItem onClick={() => handleSaveToLibrary(false)} className="text-[10px] uppercase font-bold tracking-widest rounded-none">
+                            {t.saveToLibrary}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSaveToLibrary(true)} className="text-[10px] uppercase font-bold tracking-widest rounded-none">
+                            {t.saveAsTemplate}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     )}
                     <Button 
                       variant="ghost" 
@@ -737,15 +1173,67 @@ export default function App() {
                           {isRefining ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                         </Button>
                       </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="w-full border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
-                        onClick={() => copyToClipboard(result[activeLangTab].jobDescription, 'jd')}
-                      >
-                        {copied === 'jd' ? <Check className="w-3 h-3 mr-2" /> : <Copy className="w-3 h-3 mr-2" />}
-                        {copied === 'jd' ? t.copied : t.copyJD}
-                      </Button>
+                      <div className="flex flex-col gap-4">
+                        <div className="flex items-center gap-2 mb-1 p-1 border border-editorial-ink/5 bg-zinc-50 cursor-grab active:cursor-grabbing">
+                          <GripVertical className="w-3 h-3 opacity-20" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">JD Content Segment</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                            onClick={() => copyToClipboard(result[activeLangTab].jobDescription, 'jd')}
+                          >
+                            {copied === 'jd' ? <Check className="w-3 h-3 mr-2" /> : <Copy className="w-3 h-3 mr-2" />}
+                            {copied === 'jd' ? t.copied : t.copyJD}
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={handleExportPDF}
+                            className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                          >
+                            <DownloadCloud className="w-3 h-3 mr-2" />
+                            {t.exportPDF}
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={handleExportWord}
+                            className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                          >
+                            <FileText className="w-3 h-3 mr-2" />
+                            {t.exportWord}
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={handleShare}
+                            className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                          >
+                            <Share2 className="w-3 h-3 mr-2" />
+                            {t.share}
+                          </Button>
+                        </div>
+                        <div className="pt-4 border-t border-editorial-ink/10">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            disabled={isBenchmarking}
+                            onClick={handleGetBenchmarks}
+                            className="w-full border border-editorial-ink/20 rounded-none uppercase text-[10px] font-bold tracking-widest"
+                          >
+                            {isBenchmarking ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : <BarChart3 className="w-3 h-3 mr-2" />}
+                            {t.getBenchmarks}
+                          </Button>
+                          {benchmarks && (
+                            <div className="mt-4 p-4 bg-zinc-50 border border-editorial-ink/10 text-[11px] prose prose-sm max-w-none">
+                              <ReactMarkdown>{benchmarks}</ReactMarkdown>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </section>
@@ -795,15 +1283,26 @@ export default function App() {
                           {isRefining ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                         </Button>
                       </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="w-full border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
-                        onClick={() => copyToClipboard(result[activeLangTab].interviewGuide, 'guide')}
-                      >
-                        {copied === 'guide' ? <Check className="w-3 h-3 mr-2" /> : <Copy className="w-3 h-3 mr-2" />}
-                        {copied === 'guide' ? t.copied : t.copyGuide}
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                          onClick={() => copyToClipboard(result[activeLangTab].interviewGuide, 'guide')}
+                        >
+                          {copied === 'guide' ? <Check className="w-3 h-3 mr-2" /> : <Copy className="w-3 h-3 mr-2" />}
+                          {copied === 'guide' ? t.copied : t.copyGuide}
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => setView('evaluator')}
+                          className="flex-1 border-editorial-ink rounded-none uppercase text-[10px] font-bold tracking-widest"
+                        >
+                          <Play className="w-3 h-3 mr-2" />
+                          {t.evaluatorMode}
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </section>

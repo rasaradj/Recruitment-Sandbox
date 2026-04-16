@@ -32,9 +32,28 @@
             }
           }
         },
+        "isPublic": { "type": "boolean" },
+        "isTemplate": { "type": "boolean" },
+        "authorName": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "title", "results", "createdAt"]
+    },
+    "Template": {
+      "title": "Template",
+      "description": "A reusable recruitment template shared with the community",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "rawNotes": { "type": "string" },
+        "category": { "type": "string" },
+        "installCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "rawNotes", "createdAt"]
     }
   },
   "firestore": {
@@ -45,6 +64,10 @@
     "/saved_outputs/{outputId}": {
       "schema": "SavedOutput",
       "description": "Saved recruitment outputs"
+    },
+    "/templates/{templateId}": {
+      "schema": "Template",
+      "description": "Publicly shared templates"
     }
   }
 }
