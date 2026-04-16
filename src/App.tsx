@@ -58,6 +58,7 @@ import {
   collection, 
   addDoc, 
   serverTimestamp,
+  testConnection,
   OperationType,
   handleFirestoreError,
   User as FirebaseUser,
@@ -122,6 +123,10 @@ export default function App() {
   const t = translations[uiLanguage] || translations.English;
 
   const languages = Object.keys(translations);
+
+  useEffect(() => {
+    testConnection();
+  }, []);
 
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;

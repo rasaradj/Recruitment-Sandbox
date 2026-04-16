@@ -3,10 +3,11 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChang
 import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, deleteDoc, doc, getDoc, setDoc, getDocFromServer, updateDoc } from 'firebase/firestore';
 import firebaseConfig from '@/firebase-applet-config.json';
 
+// Initialize Firebase SDK with safety check
 const app = initializeApp(firebaseConfig);
 
 // Use the database ID from config if provided
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app, firebaseConfig?.firestoreDatabaseId || 'default');
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -67,16 +68,15 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 }
 
 // Test Connection
-async function testConnection() {
+export async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
+      console.warn("Firebase is offline. Check connection or configuration.");
     }
   }
 }
-testConnection();
 
 export { 
   onAuthStateChanged, 
