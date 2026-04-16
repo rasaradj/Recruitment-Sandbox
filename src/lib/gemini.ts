@@ -64,7 +64,13 @@ ${rawNotes}` }]
 
   const text = response.text;
   if (!text) throw new Error("No response from Gemini");
-  return JSON.parse(text) as GenerationResult;
+  
+  try {
+    return JSON.parse(text) as GenerationResult;
+  } catch (parseError) {
+    console.error("Failed to parse Gemini response as JSON:", text);
+    throw new Error("Invalid response format from AI. Please try again.");
+  }
 }
 
 export async function refineMaterial(

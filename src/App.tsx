@@ -283,9 +283,10 @@ export default function App() {
       const data = await generateRecruitmentMaterials(rawNotes, selectedLanguages);
       setResult(data);
       setActiveLangTab(selectedLanguages[0]);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError('Failed to generate materials. Please check your notes and try again.');
+      const errorMessage = err.message || 'Unknown error';
+      setError(`Failed to generate materials: ${errorMessage}`);
     } finally {
       setIsGenerating(false);
     }
